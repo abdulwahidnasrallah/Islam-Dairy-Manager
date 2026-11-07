@@ -1,0 +1,40 @@
+{
+  "name": "desktop",
+  "version": "0.1.0",
+  "private": true,
+  "main": "dist/main/main.js",
+  "scripts": {
+    "dev": "tsc -p tsconfig.json && electron dist/main/main.js",
+    "build": "tsc -p tsconfig.json",
+    "package": "electron-builder",
+    "package:win": "electron-builder --win"
+  },
+  "dependencies": {
+    "@idm/shared-types": "workspace:*"
+  },
+  "devDependencies": {
+    "electron": "^31.3.1",
+    "electron-builder": "^24.13.3",
+    "typescript": "^5.5.4",
+    "@types/node": "^22.4.1"
+  },
+  "build": {
+    "appId": "com.islamdairy.manager",
+    "productName": "Islam Dairy Manager",
+    "files": ["dist/**/*", "../frontend/dist/**/*"],
+    "extraResources": [
+      { "from": "../backend/dist", "to": "backend" },
+      { "from": "../backend/node_modules", "to": "backend/node_modules" },
+      { "from": "../backend/package.json", "to": "backend/package.json" },
+      { "from": "resources/template.db", "to": "template.db" }
+    ],
+    "win": {
+      "target": "nsis",
+      "icon": "assets/icon.ico"
+    },
+    "nsis": {
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
+    }
+  }
+}

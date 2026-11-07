@@ -1,0 +1,21 @@
+{
+  "name": "database",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "generate": "prisma generate --schema=prisma/schema.prisma",
+    "migrate": "prisma migrate dev --schema=prisma/schema.prisma",
+    "studio": "prisma studio --schema=prisma/schema.prisma",
+    "seed": "tsx prisma/seed.ts",
+    "build:template": "tsx prisma/build-template-db.ts"
+  },
+  "dependencies": {
+    "@prisma/client": "5.22.0",
+    "argon2": "^0.41.1",
+    "@idm/shared-types": "workspace:*"
+  },
+  "devDependencies": {
+    "prisma": "5.22.0",
+    "tsx": "^4.16.5"
+  }
+}

@@ -1,0 +1,559 @@
+// ═══════════════════════════════════════════════════════════════
+// Islam Dairy Manager (IDM) — Database Schema
+//
+// Built incrementally, phase by phase. Each section below is labeled
+// with the phase that introduced it. Business tables for modules not
+// yet built (Product, Invoice, Inventory, ...) are added when those
+// modules are implemented — not speculatively ahead of time.
+// ═══════════════════════════════════════════════════════════════
+
+generator client {
+  provider      = "prisma-client-js"
+  // "native" keeps local dev working on whatever OS you develop on;
+  // "windows" is required so a build produced on Linux/Mac still
+  // bundles a working query engine for the Windows installer (Phase 9).
+  // After changing this, re-run `pnpm db:generate` before packaging.
+  binaryTargets = ["native", "windows"]
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+/// Global key/value application settings (store name, currency, invoice
+/// numbering prefix, low-stock alert defaults, ...). Managed by the
+/// `settings` module — see SETTINGS_KEYS in @idm/shared-types for the
+/// full list of keys the app actually reads.
+model ApplicationSettings {
+  id        String   @id @default(cuid())
+  key       String   @unique
+  value     String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([key])
+}
+
+/// User account. Full security model (roles, permissions, sessions,
+/// audit log) is implemented in Phase 3, alongside this model's roleId.
+model User {
+  id           String   @id @default(cuid())
+  username     String   @unique
+  fullName     String
+  passwordHash String
+  isActive     Boolean  @default(true)
+  roleId       String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  role     Role?     @relation(fields: [roleId], references: [id])
+  sessions Session[]
+  auditLogs AuditLog[]
+  assistantConversations AssistantConversation[]
+  dailyClosings DailyClosing[]
+
+  @@index([username])
+}
+
+// ═══════════════════════════════════════════════════════════════
+// PHASE 3 — Security Foundation (Roles, Permissions, Sessions, Audit)
+// ═══════════════════════════════════════════════════════════════
+
+model Role {
+  id          String   @id @default(cuid())
+  name        String   @unique
+  description String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  users       User[]
+  permissions RolePermission[]
+}
+
+model Permission {
+  id          String @id @default(cuid())
+  name        String @unique
+  description String?
+
+  roles RolePermission[]
+}
+
+/// Join table: which permissions each role grants.
+model RolePermission {
+  roleId       String
+  permissionId String
+
+  role       Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@id([roleId, permissionId])
+}
+
+/// A logged-in session. The session id itself (not the DB primary key)
+/// is what gets stored in the httpOnly cookie, so the cookie value alone
+/// never reveals anything about the user.
+model Session {
+  id        String   @id @default(cuid())
+  userId    String
+  expiresAt DateTime
+  deviceInfo String?
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+/// Tamper-evident record of important actions. Never updated or deleted
+/// by application code — only ever inserted.
+model AuditLog {
+  id         String   @id @default(cuid())
+  userId     String?
+  action     String
+  entityType String
+  entityId   String?
+  oldValue   String?
+  newValue   String?
+  createdAt  DateTime @default(now())
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([entityType, entityId])
+  @@index([createdAt])
+}
+
+// ═══════════════════════════════════════════════════════════════
+// PHASE 2 — Supplier & Milk Purchase Module
+// ═══════════════════════════════════════════════════════════════
+
+/// SQLite has no native enum type support in Prisma ("the current
+/// connector does not support enums"), so every field that would
+/// otherwise be a Prisma enum is a plain String here instead. The set
+/// of valid values is enforced at the application boundary by the
+/// matching Zod schema in @idm/shared-validation (e.g.
+/// paymentMethodSchema), not by the database — this is the standard,
+/// documented pattern for using Prisma with SQLite/enum-less
+/// databases, not a workaround. Allowed values for PaymentMethod:
+/// "CASH" | "BANK" | "OTHER".
+
+/// A milk supplier. Balance (what the store owes the supplier) is NOT
+/// stored here — it is always derived from MilkPurchase and
+/// SupplierPayment records, so it can never drift out of sync.
+model Supplier {
+  id        String   @id @default(cuid())
+  name      String
+  phone     String?
+  address   String?
+  notes     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  milkPurchases    MilkPurchase[]
+  payments         SupplierPayment[]
+  purchaseInvoices PurchaseInvoice[]
+
+  @@index([name])
+}
+
+/// A single milk delivery from a supplier.
+/// totalAmount = quantity × pricePerUnit, calculated by the service layer
+/// at creation time (never trust a client-supplied total).
+model MilkPurchase {
+  id               String   @id @default(cuid())
+  supplierId       String
+  date             DateTime
+  quantity         Float
+  pricePerUnit     Float
+  totalAmount      Float
+  paidAmount       Float    @default(0)
+  remainingAmount  Float
+  notes            String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  supplier Supplier @relation(fields: [supplierId], references: [id], onDelete: Restrict)
+
+  @@index([supplierId])
+  @@index([date])
+}
+
+/// A payment made by the store to a supplier, reducing the supplier balance.
+/// method: "CASH" | "BANK" | "OTHER" (see PaymentMethod note above).
+model SupplierPayment {
+  id         String   @id @default(cuid())
+  supplierId String
+  purchaseInvoiceId String?
+  amount     Float
+  date       DateTime
+  method     String   @default("CASH")
+  notes      String?
+  createdAt  DateTime @default(now())
+
+  supplier Supplier @relation(fields: [supplierId], references: [id], onDelete: Restrict)
+  purchaseInvoice PurchaseInvoice? @relation(fields: [purchaseInvoiceId], references: [id], onDelete: SetNull)
+
+  @@index([supplierId])
+  @@index([purchaseInvoiceId])
+  @@index([date])
+}
+
+// ═══════════════════════════════════════════════════════════════
+// PHASE 4 — Products, Inventory & Production
+// ═══════════════════════════════════════════════════════════════
+
+/// A sellable/produced item (cheese, yogurt, etc.). Current stock is NOT
+/// stored here — same principle as Supplier balance: it is always
+/// derived on demand from InventoryMovement so it can never drift.
+/// unit: "KG" | "LITER" | "PIECE" (plain String — see the SQLite/enum
+/// note above PaymentMethod; enforced by unit in shared-validation).
+model Product {
+  id            String   @id @default(cuid())
+  name          String
+  unit          String
+  sellingPrice  Float
+  costPrice     Float?
+  minStockAlert Float    @default(0)
+  isActive      Boolean  @default(true)
+  notes         String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  movements            InventoryMovement[]
+  productionBatches    ProductionBatch[]
+  invoiceItems         InvoiceItem[]
+  purchaseInvoiceItems PurchaseInvoiceItem[]
+
+  @@index([name])
+}
+
+/// Append-only stock ledger. Never updated or deleted by application
+/// code — only ever inserted, exactly like AuditLog. A product's current
+/// stock = sum(IN) − sum(OUT) over its movements.
+/// type: "IN" | "OUT". reason: "PRODUCTION" | "SALE" | "ADJUSTMENT" |
+/// "DAMAGE" | "RETURN" | "OTHER" | "PURCHASE" | "PURCHASE_CANCELLED" —
+/// PRODUCTION movements are created automatically by the production
+/// module, SALE/PURCHASE by their respective invoice modules
+/// (PURCHASE_CANCELLED reverses a cancelled purchase invoice), and the
+/// rest come from manual inventory adjustments. All plain String — see
+/// SQLite/enum note above.
+model InventoryMovement {
+  id        String   @id @default(cuid())
+  productId String
+  type      String
+  reason    String
+  quantity  Float
+  date      DateTime
+  notes     String?
+  createdAt DateTime @default(now())
+
+  product Product @relation(fields: [productId], references: [id], onDelete: Restrict)
+
+  @@index([productId])
+  @@index([date])
+}
+
+/// A production run that turns raw milk into a finished product.
+/// Creating a batch also inserts a matching InventoryMovement (IN,
+/// reason PRODUCTION) inside the same transaction, so stock and batch
+/// history can never disagree.
+/// milkConsumed is a plain quantity for now (not linked to a specific
+/// MilkPurchase row) — deducting from a real raw-milk inventory needs a
+/// raw-material stock model, which is intentionally out of scope here.
+model ProductionBatch {
+  id               String   @id @default(cuid())
+  productId        String
+  date             DateTime
+  quantityProduced Float
+  milkConsumed     Float?
+  notes            String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  product Product @relation(fields: [productId], references: [id], onDelete: Restrict)
+
+  @@index([productId])
+  @@index([date])
+}
+
+// ═══════════════════════════════════════════════════════════════
+// PHASE 5 — Sales, Customers, Invoices & Debts
+// ═══════════════════════════════════════════════════════════════
+
+/// A customer who buys products on credit or cash. Balance (what the
+/// customer owes the store) is NOT stored here — same principle as
+/// Supplier balance: always derived from Invoice and CustomerPayment
+/// records, so it can never drift out of sync.
+model Customer {
+  id        String   @id @default(cuid())
+  name      String
+  phone     String?
+  address   String?
+  notes     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  invoices Invoice[]
+  payments CustomerPayment[]
+
+  @@index([name])
+}
+
+/// A sales invoice. totalAmount is always the sum of its InvoiceItem
+/// totals, calculated server-side at creation time — never trusted from
+/// the client. Creating an invoice also deducts stock (InventoryMovement
+/// OUT, reason SALE) for every line item, inside the same transaction.
+/// invoiceNumber is a human-friendly sequential id (e.g. "INV-000123"),
+/// generated from the Counter model — separate from `id` (the internal
+/// cuid primary key) because a printed invoice needs a short, ordered,
+/// customer-facing number, not an opaque id.
+/// status: "CONFIRMED" | "CANCELLED" — plain String, see the SQLite/enum
+/// note above PaymentMethod (near the top of the Phase 2 section).
+model Invoice {
+  id              String   @id @default(cuid())
+  invoiceNumber   String   @unique
+  customerId      String
+  date            DateTime
+  totalAmount     Float
+  paidAmount      Float    @default(0)
+  remainingAmount Float
+  status          String   @default("CONFIRMED")
+  notes           String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  customer Customer      @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  items    InvoiceItem[]
+
+  @@index([customerId])
+  @@index([date])
+  @@index([invoiceNumber])
+}
+
+/// A single product line within an invoice.
+/// totalPrice = quantity × unitPrice, calculated by the service layer.
+/// unitCost snapshots Product.costPrice AT THE TIME OF SALE — profit
+/// reporting must use this, not the product's current cost, since the
+/// cost may have changed since this item was sold.
+model InvoiceItem {
+  id         String  @id @default(cuid())
+  invoiceId  String
+  productId  String
+  quantity   Float
+  unitPrice  Float
+  unitCost   Float?
+  totalPrice Float
+
+  invoice Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  product Product @relation(fields: [productId], references: [id], onDelete: Restrict)
+
+  @@index([invoiceId])
+  @@index([productId])
+}
+
+/// A payment made by a customer to the store, reducing the customer balance.
+/// method: "CASH" | "BANK" | "OTHER" (see PaymentMethod note in the Phase 2 section).
+model CustomerPayment {
+  id         String   @id @default(cuid())
+  customerId String
+  amount     Float
+  date       DateTime
+  method     String   @default("CASH")
+  notes      String?
+  createdAt  DateTime @default(now())
+
+  customer Customer @relation(fields: [customerId], references: [id], onDelete: Restrict)
+
+  @@index([customerId])
+  @@index([date])
+}
+
+// ═══════════════════════════════════════════════════════════════
+// PHASE 6 — Financial System (Expenses, Cash Register, Profit)
+// ═══════════════════════════════════════════════════════════════
+
+/// A store expense (rent, salaries, utilities, ...). Simple mutable
+/// record (unlike the append-only ledgers) since an expense entered
+/// wrong is a data-entry mistake, not a business event to reverse.
+/// category: "RENT" | "SALARIES" | "UTILITIES" | "TRANSPORT" |
+/// "MAINTENANCE" | "OTHER" — plain String, see the SQLite/enum note
+/// above PaymentMethod (Phase 2 section).
+model Expense {
+  id        String   @id @default(cuid())
+  category  String
+  amount    Float
+  date      DateTime
+  notes     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([date])
+  @@index([category])
+}
+
+/// A manual cash movement not tied to any other business record —
+/// e.g. starting capital, an owner withdrawal, a bank deposit. All
+/// other cash movements (sales, purchases, payments, expenses) are
+/// derived from their own tables; this model only covers the rest,
+/// so the cash register never double-counts a movement that already
+/// has a home elsewhere.
+/// type: "IN" | "OUT" — plain String, see the SQLite/enum note above
+/// PaymentMethod (Phase 2 section).
+model CashAdjustment {
+  id        String   @id @default(cuid())
+  type      String
+  amount    Float
+  date      DateTime
+  reason    String
+  notes     String?
+  createdAt DateTime @default(now())
+
+  @@index([date])
+}
+
+// ═══════════════════════════════════════════════════════════════
+// PHASE 8 — AI Assistant
+// ═══════════════════════════════════════════════════════════════
+
+/// A saved chat thread with the AI assistant, scoped to one user.
+model AssistantConversation {
+  id        String   @id @default(cuid())
+  userId    String
+  title     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user     User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  messages AssistantMessage[]
+
+  @@index([userId])
+}
+
+/// One turn in an assistant conversation. `content` is plain text for
+/// both roles — tool calls/results happen inside a single backend
+/// request and are not persisted turn-by-turn, only the final text.
+/// role: "USER" | "ASSISTANT" — plain String, see the SQLite/enum note
+/// above PaymentMethod (Phase 2 section).
+model AssistantMessage {
+  id             String   @id @default(cuid())
+  conversationId String
+  role           String
+  content        String
+  createdAt      DateTime @default(now())
+
+  conversation AssistantConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([conversationId])
+}
+
+// ═══════════════════════════════════════════════════════════════
+// FINAL POLISH — Invoice numbering, Daily Closing, Settings-backed features
+// ═══════════════════════════════════════════════════════════════
+
+/// A named integer sequence. Currently only used for invoice numbering
+/// ("invoice" key), incremented inside the same transaction as the
+/// Invoice it numbers so two concurrent sales can never collide.
+model Counter {
+  id    String @id @default(cuid())
+  key   String @unique
+  value Int    @default(0)
+}
+
+/// A snapshot taken when the owner explicitly closes a business day.
+/// Nothing else is deleted or reset when this is created — "today" on
+/// the dashboard is simply redefined as "since the last DailyClosing
+/// (or midnight, whichever is later)", so closing a day is 100% additive
+/// and can never lose historical sales, inventory, or debt data.
+model DailyClosing {
+  id                  String   @id @default(cuid())
+  businessDate        DateTime
+  closedAt            DateTime @default(now())
+  closedByUserId      String?
+  totalSales          Float
+  totalProfit         Float
+  cashBalanceAtClose  Float
+  notes               String?
+
+  closedByUser User? @relation(fields: [closedByUserId], references: [id], onDelete: SetNull)
+
+  @@index([businessDate])
+  @@index([closedAt])
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Supplier Purchase Invoices — buying tracked Products from suppliers
+// ═══════════════════════════════════════════════════════════════
+//
+// Design note (why this is a NEW model instead of extending
+// MilkPurchase): MilkPurchase records buying raw milk, which this
+// system deliberately does NOT track as Product/inventory stock (see
+// the notes in production.service.ts and purchase.service.ts) — it is
+// consumed by production batches, not sold directly. PurchaseInvoice
+// is for the opposite case: buying items that already exist as
+// `Product` rows (packaging, resale goods, anything with a tracked
+// stock level), which DOES need to increase real inventory. Because
+// MilkPurchase never touches InventoryMovement/Product at all, adding
+// PurchaseInvoice alongside it cannot cause the same quantity to be
+// added to stock twice — the two models cover disjoint use cases by
+// construction, not by a runtime guard. MilkPurchase, SupplierPayment,
+// and Supplier balance math are otherwise unchanged; PurchaseInvoice is
+// simply added into the SAME balance formula (see
+// supplier.repository.ts) alongside MilkPurchase.
+
+/// A purchase invoice from a supplier for tracked Products. Mirrors the
+/// sales Invoice model closely (numbering via Counter with a distinct
+/// key so numbers never collide with sales invoices, status via plain
+/// String for SQLite — see the note above PaymentMethod in the Phase 2
+/// section, remainingAmount derived server-side, cancellation reverses
+/// both stock and the supplier balance) but is entirely independent of
+/// it — no shared rows, no shared numbering sequence.
+/// status: "CONFIRMED" | "CANCELLED". paymentMethod: "CASH" | "BANK" | "OTHER".
+model PurchaseInvoice {
+  id              String   @id @default(cuid())
+  purchaseNumber  String   @unique
+  supplierId      String
+  date            DateTime
+  totalAmount     Float
+  paidAmount      Float    @default(0)
+  remainingAmount Float
+  paymentMethod   String   @default("CASH")
+  status          String   @default("CONFIRMED")
+  paymentStatus   String   @default("UNPAID")
+  notes           String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  supplier Supplier              @relation(fields: [supplierId], references: [id], onDelete: Restrict)
+  items    PurchaseInvoiceItem[]
+  payments SupplierPayment[]
+
+  @@index([supplierId])
+  @@index([date])
+  @@index([purchaseNumber])
+}
+
+/// A single product line within a purchase invoice.
+/// totalPrice = quantity × unitPrice, calculated by the service layer.
+/// No unitCost snapshot here (unlike sales InvoiceItem) — that field
+/// exists on the sales side specifically to freeze COGS at sale time;
+/// a purchase's own unitPrice already IS its cost, nothing to snapshot
+/// separately. Purchasing does not automatically update
+/// Product.costPrice — cost origination stays exactly as before
+/// (manual entry or production-batch auto-linking), so COGS reporting
+/// is unaffected by this feature.
+model PurchaseInvoiceItem {
+  id                String @id @default(cuid())
+  purchaseInvoiceId String
+  productId         String
+  quantity          Float
+  unitPrice         Float
+  totalPrice        Float
+
+  purchaseInvoice PurchaseInvoice @relation(fields: [purchaseInvoiceId], references: [id], onDelete: Cascade)
+  product         Product         @relation(fields: [productId], references: [id], onDelete: Restrict)
+
+  @@index([purchaseInvoiceId])
+  @@index([productId])
+}

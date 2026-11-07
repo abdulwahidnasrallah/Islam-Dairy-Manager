@@ -1,0 +1,13 @@
+node_modules/
+dist/
+dist-electron/
+release/
+.env
+*.db
+*.db-journal
+database/dev.db
+apps/**/dist/
+apps/desktop/out/
+.DS_Store
+*.log
+coverage/

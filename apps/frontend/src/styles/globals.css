@@ -1,0 +1,72 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    direction: rtl;
+  }
+
+  body {
+    @apply font-arabic bg-surface-muted text-gray-900 antialiased;
+  }
+
+  :focus-visible {
+    @apply outline outline-2 outline-offset-2 outline-primary-500;
+  }
+}
+
+@layer components {
+  .card {
+    @apply rounded-card border border-gray-200 bg-surface p-4 shadow-sm;
+  }
+}
+
+/* Used by the invoice view page (/sales/:id) "طباعة" button to print
+   only the invoice itself.
+   NOTE: this deliberately does NOT use the common "body * { visibility:
+   hidden } + #target { visibility: visible; position: absolute }"
+   trick. That technique only works if every ancestor of #target has
+   the default `position: static` — but AppLayout's shell uses
+   `overflow-hidden` / `overflow-y-auto` scrolling containers for the
+   on-screen UI, and depending on the browser's containing-block
+   resolution that can leave the "escaped" element clipped, mispositioned,
+   or blank in the print preview (this is what was actually broken).
+   Instead: hide the chrome outright with display:none (which removes
+   it from the render tree, no positioning tricks needed) and reset the
+   screen-only height/overflow/scroll constraints so the invoice can
+   flow naturally on the printed page. */
+@media print {
+  .no-print {
+    display: none !important;
+  }
+
+  html,
+  body {
+    height: auto !important;
+    overflow: visible !important;
+    background: #fff !important;
+  }
+
+  .app-shell,
+  .app-body {
+    display: block !important;
+    height: auto !important;
+    overflow: visible !important;
+  }
+
+  main {
+    padding: 0 !important;
+    overflow: visible !important;
+    height: auto !important;
+  }
+
+  #printable-invoice {
+    max-width: none !important;
+    width: 100% !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    box-shadow: none !important;
+    border: none !important;
+  }
+}
