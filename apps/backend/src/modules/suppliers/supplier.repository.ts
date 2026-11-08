@@ -15,6 +15,15 @@ import type { Prisma } from "@prisma/client";
  */
 const CONFIRMED_PURCHASE_INVOICE = { status: "CONFIRMED" as const };
 
+/**
+ * A SupplierPayment linked to a purchase invoice is ALSO included in that
+ * invoice's paidAmount (same transaction), so the invoice aggregate already
+ * counts it. Only UNLINKED payments are "separate" payments here — counting
+ * the linked ones again would subtract the same money twice. Linked payments
+ * of a cancelled invoice vanish together with the invoice.
+ */
+const GENERAL_PAYMENT = { purchaseInvoiceId: null } as const;
+
 export const supplierRepository = {
   findMany(search?: string) {
     return prisma.supplier.findMany({
@@ -76,7 +85,7 @@ export const supplierRepository = {
         _sum: { totalAmount: true, paidAmount: true },
       }),
       prisma.supplierPayment.aggregate({
-        where: { supplierId, purchaseInvoiceId: null },
+        where: { supplierId, ...GENERAL_PAYMENT },
         _sum: { amount: true },
       }),
     ]);
@@ -116,7 +125,7 @@ export const supplierRepository = {
         where: CONFIRMED_PURCHASE_INVOICE,
         _sum: { totalAmount: true, paidAmount: true },
       }),
-      prisma.supplierPayment.aggregate({ where: { purchaseInvoiceId: null }, _sum: { amount: true } }),
+      prisma.supplierPayment.aggregate({ where: GENERAL_PAYMENT, _sum: { amount: true } }),
     ]);
 
     const totalPurchases =

@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from "react";
+import { Input } from "@/components/ui/Input";
+import { supplierPaymentService } from "@/services/supplierPaymentService";
 import { useParams, useNavigate, Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Printer, Download, XCircle } from "lucide-react";
@@ -13,10 +15,11 @@ const statusLabel: Record<string, string> = {
   CONFIRMED: "سارية",
   CANCELLED: "ملغاة",
 };
+
 const paymentStatusLabel: Record<string, string> = {
-  PAID: "مدفوعة",
-  PARTIALLY_PAID: "مدفوعة جزئياً",
   UNPAID: "غير مدفوعة",
+  PARTIAL: "مدفوعة جزئياً",
+  PAID: "مدفوعة بالكامل",
 };
 
 const paymentMethodLabel: Record<string, string> = {
@@ -33,6 +36,11 @@ export default function PurchaseInvoiceViewPage() {
   const printRef = useRef<HTMLDivElement>(null);
   const [qrDataUrl, setQrDataUrl] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [payAmount, setPayAmount] = useState("");
+  const [payMethod, setPayMethod] = useState<"CASH" | "BANK" | "OTHER">("CASH");
+  const [payError, setPayError] = useState<string | null>(null);
+  // Same key on a double click / retry => the payment is recorded once.
+  const payKeyRef = useRef<string>(crypto.randomUUID());
 
   const { data: purchaseInvoice, isLoading } = useQuery({
     queryKey: ["purchase-invoice", id],
@@ -54,6 +62,32 @@ export default function PurchaseInvoiceViewPage() {
     },
     onError: (err) => {
       setError(err instanceof ApiClientError ? err.message : "حدث خطأ غير متوقع");
+    },
+  });
+
+  const payMutation = useMutation({
+    mutationFn: () =>
+      supplierPaymentService.create({
+        supplierId: purchaseInvoice!.supplierId,
+        purchaseInvoiceId: purchaseInvoice!.id,
+        amount: Number(payAmount),
+        date: new Date(),
+        method: payMethod,
+        idempotencyKey: payKeyRef.current,
+      }),
+    onSuccess: () => {
+      payKeyRef.current = crypto.randomUUID();
+      setPayAmount("");
+      setPayError(null);
+      void queryClient.invalidateQueries({ queryKey: ["purchase-invoice", id] });
+      void queryClient.invalidateQueries({ queryKey: ["purchase-invoices"] });
+      void queryClient.invalidateQueries({ queryKey: ["suppliers"] });
+      void queryClient.invalidateQueries({ queryKey: ["supplier", purchaseInvoice?.supplierId] });
+      void queryClient.invalidateQueries({ queryKey: ["cash-register"] });
+      void queryClient.invalidateQueries({ queryKey: ["dashboard-summary"] });
+    },
+    onError: (err) => {
+      setPayError(err instanceof ApiClientError ? err.message : "حدث خطأ غير متوقع");
     },
   });
 
@@ -119,6 +153,51 @@ export default function PurchaseInvoiceViewPage() {
       </div>
 
       {error && <p className="no-print text-sm text-danger">{error}</p>}
+
+      {purchaseInvoice.status === "CONFIRMED" && purchaseInvoice.remainingAmount > 0 && (
+        <form
+          className="no-print mx-auto flex w-full max-w-lg flex-wrap items-end gap-3 rounded border border-gray-200 p-3"
+          onSubmit={(e) => {
+            e.preventDefault();
+            setPayError(null);
+            const value = Number(payAmount);
+            if (!payAmount || value <= 0) {
+              setPayError("أدخل مبلغاً صحيحاً");
+              return;
+            }
+            if (value > purchaseInvoice.remainingAmount) {
+              setPayError(
+                `المبلغ أكبر من المتبقي على الفاتورة (${formatCurrency(purchaseInvoice.remainingAmount, purchaseInvoice.currency)})`,
+              );
+              return;
+            }
+            if (payMutation.isPending) return;
+            payMutation.mutate();
+          }}
+        >
+          <Input
+            label={`تسجيل دفعة (المتبقي ${formatCurrency(purchaseInvoice.remainingAmount, purchaseInvoice.currency)})`}
+            type="number"
+            step="0.01"
+            value={payAmount}
+            onChange={(e) => setPayAmount(e.target.value)}
+            className="w-40"
+          />
+          <select
+            className="rounded border border-gray-300 px-2 py-2 text-sm"
+            value={payMethod}
+            onChange={(e) => setPayMethod(e.target.value as typeof payMethod)}
+          >
+            <option value="CASH">نقدي</option>
+            <option value="BANK">بنكي</option>
+            <option value="OTHER">أخرى</option>
+          </select>
+          <Button type="submit" isLoading={payMutation.isPending}>
+            تسجيل الدفعة
+          </Button>
+          {payError && <p className="w-full text-sm text-danger">{payError}</p>}
+        </form>
+      )}
 
       <div id="printable-invoice" ref={printRef} className="card mx-auto w-full max-w-lg">
         <div className="flex flex-col gap-4 p-2" dir="rtl">
@@ -217,11 +296,27 @@ export default function PurchaseInvoiceViewPage() {
               <span>حالة الفاتورة</span>
               <span>{statusLabel[purchaseInvoice.status] ?? purchaseInvoice.status}</span>
             </div>
-            <div className="flex justify-between text-xs text-gray-400">
-              <span>حالة السداد</span>
-              <span>{paymentStatusLabel[purchaseInvoice.paymentStatus] ?? purchaseInvoice.paymentStatus}</span>
-            </div>
+            {purchaseInvoice.status === "CONFIRMED" && (
+              <div className="flex justify-between">
+                <span className="text-gray-500">حالة السداد</span>
+                <span className="font-bold">
+                  {paymentStatusLabel[purchaseInvoice.paymentStatus] ?? purchaseInvoice.paymentStatus}
+                </span>
+              </div>
+            )}
           </div>
+
+          {purchaseInvoice.payments && purchaseInvoice.payments.length > 0 && (
+            <div className="border-t border-dashed border-gray-200 pt-3 text-sm">
+              <p className="mb-1 text-gray-500">الدفعات اللاحقة على الفاتورة</p>
+              {purchaseInvoice.payments.map((pay) => (
+                <div key={pay.id} className="flex justify-between">
+                  <span>{new Date(pay.date).toLocaleDateString("ar-EG")}</span>
+                  <span className="font-bold">{formatCurrency(pay.amount, purchaseInvoice.currency)}</span>
+                </div>
+              ))}
+            </div>
+          )}
 
           {purchaseInvoice.notes && (
             <p className="text-xs text-gray-500">ملاحظات: {purchaseInvoice.notes}</p>

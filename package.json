@@ -15,6 +15,8 @@
     "build": "pnpm -r run build",
     "db:generate": "pnpm --filter database run generate",
     "db:migrate": "pnpm --filter database run migrate",
+    "db:deploy": "pnpm --filter database run migrate:deploy",
+    "verify": "sh tests/verify-all.sh",
     "db:seed": "pnpm --filter database run seed",
     "db:build-template": "pnpm --filter database run build:template",
     "package:win": "pnpm build && pnpm db:build-template && pnpm --filter desktop run package:win",

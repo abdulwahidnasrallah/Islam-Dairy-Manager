@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useParams, Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Card } from "@/components/ui/Card";
@@ -9,7 +9,7 @@ import { DataTable, type TableColumn } from "@/components/ui/DataTable";
 import { supplierService } from "@/services/supplierService";
 import { supplierPaymentService } from "@/services/supplierPaymentService";
 import { ApiClientError } from "@/services/apiClient";
-import { formatCurrency } from "@idm/shared-utils";
+import { buildSupplierStatement, formatCurrency, type SupplierStatementEntry } from "@idm/shared-utils";
 import type { MilkPurchase, PurchaseInvoice, SupplierPayment } from "@idm/shared-types";
 
 const purchaseColumns: TableColumn<MilkPurchase>[] = [
@@ -44,23 +44,51 @@ const purchaseInvoiceColumns: TableColumn<PurchaseInvoice>[] = [
   },
   {
     header: "الحالة",
-    render: (i) =>
-      i.status === "CANCELLED" ? (
-        <span className="text-danger">ملغاة</span>
-      ) : (
-        <span className="text-success">سارية</span>
-      ),
+    render: (i) => {
+      if (i.status === "CANCELLED") return <span className="text-danger">ملغاة</span>;
+      if (i.paymentStatus === "PAID") return <span className="text-success">مدفوعة</span>;
+      if (i.paymentStatus === "PARTIAL") return <span className="text-warning">مدفوعة جزئياً</span>;
+      return <span className="text-danger">غير مدفوعة</span>;
+    },
   },
 ];
 
-const paymentColumns: TableColumn<SupplierPayment>[] = [
-  { header: "التاريخ", render: (p) => new Date(p.date).toLocaleDateString("ar-EG") },
-  { header: "المبلغ", render: (p) => formatCurrency(p.amount) },
+function makePaymentColumns(invoiceNumberById: Map<string, string>): TableColumn<SupplierPayment>[] {
+  return [
+    { header: "التاريخ", render: (p) => new Date(p.date).toLocaleDateString("ar-EG") },
+    { header: "المبلغ", render: (p) => formatCurrency(p.amount) },
+    {
+      header: "الطريقة",
+      render: (p) => ({ CASH: "نقدي", BANK: "بنكي", OTHER: "أخرى" }[p.method]),
+    },
+    {
+      header: "الفاتورة",
+      render: (p) =>
+        p.purchaseInvoiceId ? (
+          <Link to={`/purchase-invoices/${p.purchaseInvoiceId}`} className="text-primary-700 hover:underline">
+            {invoiceNumberById.get(p.purchaseInvoiceId) ?? "فاتورة"}
+          </Link>
+        ) : (
+          "دفعة عامة"
+        ),
+    },
+    { header: "ملاحظات", render: (p) => p.notes ?? "—" },
+  ];
+}
+
+const statementColumns: TableColumn<SupplierStatementEntry>[] = [
+  { header: "التاريخ", render: (e) => new Date(e.date).toLocaleDateString("ar-EG") },
+  { header: "البيان", render: (e) => e.reference },
+  { header: "عليه (مشتريات)", render: (e) => (e.debit ? formatCurrency(e.debit) : "—") },
+  { header: "له (مدفوع)", render: (e) => (e.credit ? formatCurrency(e.credit) : "—") },
   {
-    header: "الطريقة",
-    render: (p) => ({ CASH: "نقدي", BANK: "بنكي", OTHER: "أخرى" }[p.method]),
+    header: "الرصيد",
+    render: (e) => (
+      <span className={e.balance > 0 ? "font-bold text-warning" : "font-bold text-success"}>
+        {formatCurrency(e.balance)}
+      </span>
+    ),
   },
-  { header: "ملاحظات", render: (p) => p.notes ?? "—" },
 ];
 
 export default function SupplierProfilePage() {
@@ -74,33 +102,79 @@ export default function SupplierProfilePage() {
   });
 
   const [amount, setAmount] = useState("");
+  // Optional: settle one specific purchase invoice instead of a general payment.
+  const [paymentInvoiceId, setPaymentInvoiceId] = useState("");
+  // One key per payment attempt: a double click or a retry re-sends the SAME key,
+  // so the server records the payment once. A fresh key is made after success.
+  const paymentKeyRef = useRef<string>(crypto.randomUUID());
   const [method, setMethod] = useState<"CASH" | "BANK" | "OTHER">("CASH");
-  const [purchaseInvoiceId, setPurchaseInvoiceId] = useState("");
   const [paymentError, setPaymentError] = useState<string | null>(null);
 
   const paymentMutation = useMutation({
     mutationFn: () =>
       supplierPaymentService.create({
         supplierId: id!,
-        purchaseInvoiceId: purchaseInvoiceId || null,
         amount: Number(amount),
         date: new Date(),
         method,
+        purchaseInvoiceId: paymentInvoiceId || null,
+        idempotencyKey: paymentKeyRef.current,
       }),
     onSuccess: () => {
+      paymentKeyRef.current = crypto.randomUUID();
       setAmount("");
+      setPaymentInvoiceId("");
       setPaymentError(null);
       void queryClient.invalidateQueries({ queryKey: ["supplier", id] });
       void queryClient.invalidateQueries({ queryKey: ["suppliers"] });
+      void queryClient.invalidateQueries({ queryKey: ["purchase-invoices"] });
+      void queryClient.invalidateQueries({ queryKey: ["purchase-invoice"] });
+      void queryClient.invalidateQueries({ queryKey: ["cash-register"] });
+      void queryClient.invalidateQueries({ queryKey: ["dashboard-summary"] });
     },
     onError: (err) => {
       setPaymentError(err instanceof ApiClientError ? err.message : "حدث خطأ غير متوقع");
     },
   });
 
+  const statement = useMemo(
+    () =>
+      profile
+        ? buildSupplierStatement({
+            milkPurchases: profile.purchases.map((m) => ({
+              id: m.id,
+              date: m.date,
+              totalAmount: m.totalAmount,
+              paidAmount: m.paidAmount,
+            })),
+            purchaseInvoices: profile.purchaseInvoices.map((i) => ({
+              id: i.id,
+              purchaseNumber: i.purchaseNumber,
+              date: i.date,
+              totalAmount: i.totalAmount,
+              initialPaidAmount: i.initialPaidAmount,
+              status: i.status,
+            })),
+            payments: profile.payments.map((p) => ({
+              id: p.id,
+              date: p.date,
+              amount: p.amount,
+              purchaseInvoiceId: p.purchaseInvoiceId,
+            })),
+          })
+        : null,
+    [profile],
+  );
+
   if (isLoading || !profile) {
     return <p className="text-sm text-gray-400">جاري التحميل...</p>;
   }
+
+  const invoiceNumberById = new Map(profile.purchaseInvoices.map((i) => [i.id, i.purchaseNumber]));
+  const payableInvoices = profile.purchaseInvoices.filter(
+    (i) => i.status === "CONFIRMED" && i.remainingAmount > 0,
+  );
+  const selectedInvoice = payableInvoices.find((i) => i.id === paymentInvoiceId);
 
   return (
     <div className="flex flex-col gap-6">
@@ -144,6 +218,12 @@ export default function SupplierProfilePage() {
               setPaymentError("أدخل مبلغاً صحيحاً");
               return;
             }
+            if (selectedInvoice && Number(amount) > selectedInvoice.remainingAmount) {
+              setPaymentError(
+                `المبلغ أكبر من المتبقي على الفاتورة (${formatCurrency(selectedInvoice.remainingAmount)})`,
+              );
+              return;
+            }
             paymentMutation.mutate();
           }}
         >
@@ -156,6 +236,19 @@ export default function SupplierProfilePage() {
             className="w-40"
           />
           <Select
+            label="الدفعة على"
+            value={paymentInvoiceId}
+            onChange={(e) => setPaymentInvoiceId(e.target.value)}
+            className="w-64"
+          >
+            <option value="">دفعة عامة (من رصيد المورد)</option>
+            {payableInvoices.map((i) => (
+              <option key={i.id} value={i.id}>
+                {i.purchaseNumber} — المتبقي {formatCurrency(i.remainingAmount)}
+              </option>
+            ))}
+          </Select>
+          <Select
             label="طريقة الدفع"
             value={method}
             onChange={(e) => setMethod(e.target.value as typeof method)}
@@ -164,21 +257,6 @@ export default function SupplierProfilePage() {
             <option value="CASH">نقدي</option>
             <option value="BANK">بنكي</option>
             <option value="OTHER">أخرى</option>
-          </Select>
-          <Select
-            label="الفاتورة"
-            value={purchaseInvoiceId}
-            onChange={(e) => setPurchaseInvoiceId(e.target.value)}
-            className="w-56"
-          >
-            <option value="">دفعة عامة للمورد</option>
-            {profile.purchaseInvoices
-              .filter((invoice) => invoice.status === "CONFIRMED" && invoice.remainingAmount > 0)
-              .map((invoice) => (
-                <option key={invoice.id} value={invoice.id}>
-                  {invoice.purchaseNumber} ({formatCurrency(invoice.remainingAmount)})
-                </option>
-              ))}
           </Select>
           <Button type="submit" isLoading={paymentMutation.isPending}>
             تسجيل الدفعة
@@ -218,12 +296,31 @@ export default function SupplierProfilePage() {
       <div>
         <h3 className="mb-2 text-sm font-bold text-gray-700">الدفعات</h3>
         <DataTable
-          columns={paymentColumns}
+          columns={makePaymentColumns(invoiceNumberById)}
           rows={profile.payments}
           keyExtractor={(p) => p.id}
           emptyMessage="لا توجد دفعات مسجلة"
         />
       </div>
+
+      {statement && (
+        <div>
+          <h3 className="mb-2 text-sm font-bold text-gray-700">
+            كشف الحساب (الفواتير الملغاة لا تظهر فيه)
+          </h3>
+          <DataTable
+            columns={statementColumns}
+            rows={statement.entries}
+            keyExtractor={(e) => e.id}
+            emptyMessage="لا توجد حركات"
+          />
+          <p className="mt-2 text-sm text-gray-700">
+            إجمالي عليه: <span className="font-bold">{formatCurrency(statement.totalDebit)}</span> — إجمالي
+            له: <span className="font-bold">{formatCurrency(statement.totalCredit)}</span> — الرصيد الختامي:{" "}
+            <span className="font-bold">{formatCurrency(statement.closingBalance)}</span>
+          </p>
+        </div>
+      )}
     </div>
   );
 }

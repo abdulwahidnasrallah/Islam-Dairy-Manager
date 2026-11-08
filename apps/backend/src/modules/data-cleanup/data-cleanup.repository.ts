@@ -16,11 +16,12 @@ import { prisma } from "../../config/prisma";
  *   2. PurchaseInvoiceItem  (references PurchaseInvoice, Product)
  *   3. AssistantMessage     (references AssistantConversation)
  *   4. Invoice              (references Customer)
- *   5. PurchaseInvoice      (references Supplier)
- *   6. InventoryMovement    (references Product)
- *   7. ProductionBatch      (references Product)
- *   8. MilkPurchase         (references Supplier)
- *   9. SupplierPayment      (references Supplier)
+ *   5. SupplierPayment      (references Supplier AND PurchaseInvoice —
+ *                            so it must go BEFORE PurchaseInvoice)
+ *   6. PurchaseInvoice      (references Supplier)
+ *   7. InventoryMovement    (references Product)
+ *   8. ProductionBatch      (references Product)
+ *   9. MilkPurchase         (references Supplier)
  *  10. CustomerPayment      (references Customer)
  *  11. AssistantConversation(references User — User itself is kept)
  *  12. DailyClosing         (references User — User itself is kept)
@@ -40,11 +41,11 @@ const DELETE_ORDER = [
   "PurchaseInvoiceItem",
   "AssistantMessage",
   "Invoice",
+  "SupplierPayment",
   "PurchaseInvoice",
   "InventoryMovement",
   "ProductionBatch",
   "MilkPurchase",
-  "SupplierPayment",
   "CustomerPayment",
   "AssistantConversation",
   "DailyClosing",
@@ -63,11 +64,11 @@ export const dataCleanupRepository = {
       prisma.purchaseInvoiceItem.deleteMany(),
       prisma.assistantMessage.deleteMany(),
       prisma.invoice.deleteMany(),
+      prisma.supplierPayment.deleteMany(),
       prisma.purchaseInvoice.deleteMany(),
       prisma.inventoryMovement.deleteMany(),
       prisma.productionBatch.deleteMany(),
       prisma.milkPurchase.deleteMany(),
-      prisma.supplierPayment.deleteMany(),
       prisma.customerPayment.deleteMany(),
       prisma.assistantConversation.deleteMany(),
       prisma.dailyClosing.deleteMany(),

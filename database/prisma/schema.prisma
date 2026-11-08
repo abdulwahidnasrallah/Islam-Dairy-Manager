@@ -185,19 +185,29 @@ model MilkPurchase {
 model SupplierPayment {
   id         String   @id @default(cuid())
   supplierId String
-  purchaseInvoiceId String?
   amount     Float
   date       DateTime
   method     String   @default("CASH")
   notes      String?
   createdAt  DateTime @default(now())
 
-  supplier Supplier @relation(fields: [supplierId], references: [id], onDelete: Restrict)
-  purchaseInvoice PurchaseInvoice? @relation(fields: [purchaseInvoiceId], references: [id], onDelete: SetNull)
+  /// Optional link to the purchase invoice this payment settles. A linked
+  /// payment is ALSO added to that invoice's paidAmount (and subtracted from
+  /// its remainingAmount) in the same transaction, so the supplier balance
+  /// counts it through the invoice and must NOT count it a second time as a
+  /// "separate" payment (see supplier.repository.ts). NULL = a general
+  /// payment against the supplier's overall balance (e.g. milk purchases).
+  purchaseInvoiceId String?
+  /// Client-generated key that makes a re-sent request idempotent: the same
+  /// key can never create a second payment.
+  idempotencyKey    String? @unique
+
+  supplier        Supplier          @relation(fields: [supplierId], references: [id], onDelete: Restrict)
+  purchaseInvoice PurchaseInvoice?  @relation(fields: [purchaseInvoiceId], references: [id], onDelete: Restrict)
 
   @@index([supplierId])
-  @@index([purchaseInvoiceId])
   @@index([date])
+  @@index([purchaseInvoiceId])
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -517,11 +527,19 @@ model PurchaseInvoice {
   date            DateTime
   totalAmount     Float
   paidAmount      Float    @default(0)
+  /// The part of paidAmount paid when the invoice was created (the cash that
+  /// left the till on the invoice date). Later payments recorded against the
+  /// invoice raise paidAmount but never this field — the cash register uses it
+  /// so an invoice's up-front payment and its later SupplierPayments are never
+  /// counted twice.
+  initialPaidAmount Float    @default(0)
   remainingAmount Float
   paymentMethod   String   @default("CASH")
   status          String   @default("CONFIRMED")
-  paymentStatus   String   @default("UNPAID")
   notes           String?
+  /// Client-generated key: re-sending the same create request can never
+  /// create (or re-stock) a second invoice.
+  idempotencyKey  String?  @unique
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 

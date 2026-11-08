@@ -26,3 +26,5 @@ export function toArabicDigits(value: string | number): string {
   const arabicDigits = ["٠", "١", "٢", "٣", "٤", "٥", "٦", "٧", "٨", "٩"];
   return String(value).replace(/[0-9]/g, (d) => arabicDigits[Number(d)] ?? d);
 }
+
+export * from "./accounting";

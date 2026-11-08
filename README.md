@@ -666,5 +666,3 @@ pnpm db:generate
 - `apps/frontend/src/layouts/Sidebar.tsx` (تعديل — فئة `no-print`)
 
 لا تغيير في قاعدة البيانات، ولا في أي Feature أخرى، ولا في `InvoiceViewPage.tsx`.
-#   I s l a m - D a i r y - M a n a g e r  
- 

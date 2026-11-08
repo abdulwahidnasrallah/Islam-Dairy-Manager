@@ -81,11 +81,12 @@ export interface MilkPurchase {
 export interface SupplierPayment {
   id: string;
   supplierId: string;
-  purchaseInvoiceId: string | null;
   amount: number;
   date: string;
   method: PaymentMethod;
   notes: string | null;
+  /** Set when the payment settles a specific purchase invoice; null for a general payment. */
+  purchaseInvoiceId: string | null;
   createdAt: string;
 }
 
@@ -515,6 +516,9 @@ export interface DataCleanupResult {
 
 export type PurchaseInvoiceStatus = "CONFIRMED" | "CANCELLED";
 
+/** Derived from paid vs. total (never stored): UNPAID / PARTIAL / PAID. */
+export type PurchaseInvoicePaymentStatus = "UNPAID" | "PARTIAL" | "PAID";
+
 export interface PurchaseInvoiceItem {
   id: string;
   purchaseInvoiceId: string;
@@ -535,14 +539,19 @@ export interface PurchaseInvoice {
   date: string;
   totalAmount: number;
   paidAmount: number;
+  /** The part of paidAmount paid when the invoice was created (later payments excluded). */
+  initialPaidAmount: number;
   remainingAmount: number;
   paymentMethod: PaymentMethod;
   status: PurchaseInvoiceStatus;
-  paymentStatus: "PAID" | "PARTIALLY_PAID" | "UNPAID";
+  /** UNPAID / PARTIAL / PAID — follows paidAmount automatically. */
+  paymentStatus: PurchaseInvoicePaymentStatus;
   notes: string | null;
   createdAt: string;
   updatedAt: string;
   items: PurchaseInvoiceItem[];
+  /** Payments recorded against this invoice after it was created (oldest first). */
+  payments?: SupplierPayment[];
 }
 
 /** Full purchase invoice detail for the print/view page — includes store info so the invoice is self-contained, same idea as InvoiceDetail. */

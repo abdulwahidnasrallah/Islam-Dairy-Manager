@@ -5,6 +5,7 @@ import { Input } from "@/components/ui/Input";
 import { Select } from "@/components/ui/Select";
 import { Button } from "@/components/ui/Button";
 import { DataTable, type TableColumn } from "@/components/ui/DataTable";
+import { productService } from "@/services/productService";
 import { inventoryService } from "@/services/inventoryService";
 import { ApiClientError } from "@/services/apiClient";
 import type { ProductWithStock } from "@idm/shared-types";

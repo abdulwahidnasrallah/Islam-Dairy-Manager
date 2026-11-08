@@ -4,6 +4,7 @@ import type { Prisma } from "@prisma/client";
 const PURCHASE_INVOICE_INCLUDE = {
   items: { include: { product: { select: { name: true, unit: true } } } },
   supplier: { select: { name: true } },
+  payments: { orderBy: { date: "asc" } },
 } satisfies Prisma.PurchaseInvoiceInclude;
 
 export const purchaseInvoiceRepository = {
@@ -17,6 +18,10 @@ export const purchaseInvoiceRepository = {
 
   findById(id: string) {
     return prisma.purchaseInvoice.findUnique({ where: { id }, include: PURCHASE_INVOICE_INCLUDE });
+  },
+
+  findByIdempotencyKey(idempotencyKey: string) {
+    return prisma.purchaseInvoice.findUnique({ where: { idempotencyKey }, include: PURCHASE_INVOICE_INCLUDE });
   },
 
   /**
@@ -125,13 +130,6 @@ export const purchaseInvoiceRepository = {
           },
         });
       }
-
-      // Keep payments already made as supplier credits after cancellation.
-      // Otherwise they would disappear from the supplier balance and cash ledger.
-      await tx.supplierPayment.updateMany({
-        where: { purchaseInvoiceId: id },
-        data: { purchaseInvoiceId: null },
-      });
 
       return purchaseInvoice;
     });

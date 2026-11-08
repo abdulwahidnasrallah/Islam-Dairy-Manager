@@ -2,6 +2,7 @@ import { supplierRepository } from "./supplier.repository";
 import { AppError } from "../../utils/AppError";
 import { auditService } from "../../services/audit.service";
 import type { CreateSupplierInput, UpdateSupplierInput } from "@idm/shared-validation";
+import { getPurchasePaymentStatus } from "@idm/shared-utils";
 import type { Supplier, SupplierProfile, SupplierWithBalance } from "@idm/shared-types";
 
 function toDto(supplier: {
@@ -135,11 +136,11 @@ export const supplierService = {
       payments: supplier.payments.map((pay) => ({
         id: pay.id,
         supplierId: pay.supplierId,
-        purchaseInvoiceId: pay.purchaseInvoiceId,
         amount: pay.amount,
         date: pay.date.toISOString(),
-        method: pay.method as SupplierPayment["method"],
+        method: pay.method,
         notes: pay.notes,
+        purchaseInvoiceId: pay.purchaseInvoiceId,
         createdAt: pay.createdAt.toISOString(),
       })),
       purchaseInvoices: supplier.purchaseInvoices.map((inv) => ({
@@ -149,10 +150,11 @@ export const supplierService = {
         date: inv.date.toISOString(),
         totalAmount: inv.totalAmount,
         paidAmount: inv.paidAmount,
+        initialPaidAmount: inv.initialPaidAmount,
         remainingAmount: inv.remainingAmount,
-        paymentMethod: inv.paymentMethod as PurchaseInvoice["paymentMethod"],
-        status: inv.status as PurchaseInvoice["status"],
-        paymentStatus: inv.paymentStatus as PurchaseInvoice["paymentStatus"],
+        paymentMethod: inv.paymentMethod,
+        status: inv.status,
+        paymentStatus: getPurchasePaymentStatus(inv.totalAmount, inv.paidAmount),
         notes: inv.notes,
         createdAt: inv.createdAt.toISOString(),
         updatedAt: inv.updatedAt.toISOString(),

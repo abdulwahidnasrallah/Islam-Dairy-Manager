@@ -73,12 +73,14 @@ const createWithMovementsMock = vi.fn(
 
 const cancelWithMovementsMock = vi.fn();
 const findByIdMock = vi.fn();
+const findByIdempotencyKeyMock = vi.fn();
 
 vi.mock("./purchase-invoice.repository", () => ({
   purchaseInvoiceRepository: {
     createWithMovements: (...args: unknown[]) => createWithMovementsMock(...args),
     cancelWithMovements: (...args: unknown[]) => cancelWithMovementsMock(...args),
     findById: (...args: unknown[]) => findByIdMock(...args),
+    findByIdempotencyKey: (...args: unknown[]) => findByIdempotencyKeyMock(...args),
   },
 }));
 
@@ -152,6 +154,63 @@ describe("purchaseInvoiceService.create", () => {
     ).rejects.toMatchObject({ errorCode: "OVERPAYMENT" });
 
     expect(createWithMovementsMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("purchaseInvoiceService.create — idempotency and payment status", () => {
+  const input = {
+    supplierId: "sup_1",
+    date: new Date("2026-09-01"),
+    items: [{ productId: "prod_1", quantity: 10, unitPrice: 5 }],
+    paidAmount: 0,
+    paymentMethod: "CASH" as const,
+    notes: null,
+    idempotencyKey: "key-12345678",
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    purchaseCounter = 0;
+    findByIdempotencyKeyMock.mockResolvedValue(null);
+  });
+
+  it("re-sending the same key returns the existing invoice: no second invoice, no second stock movement", async () => {
+    findByIdempotencyKeyMock.mockResolvedValue({
+      id: "purchase_1",
+      purchaseNumber: "PUR-000001",
+      status: "CONFIRMED",
+      supplierId: "sup_1",
+      date: new Date("2026-09-01"),
+      totalAmount: 50,
+      paidAmount: 0,
+      remainingAmount: 50,
+      paymentMethod: "CASH",
+      notes: null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      items: [],
+    });
+
+    const result = await purchaseInvoiceService.create(input, "user_1");
+
+    expect(result.purchaseNumber).toBe("PUR-000001");
+    expect(createWithMovementsMock).not.toHaveBeenCalled();
+  });
+
+  it("stores the up-front payment as initialPaidAmount and the key on the invoice", async () => {
+    await purchaseInvoiceService.create({ ...input, paidAmount: 20 }, "user_1");
+    const [purchaseData] = createWithMovementsMock.mock.calls[0];
+    expect(purchaseData.initialPaidAmount).toBe(20);
+    expect(purchaseData.idempotencyKey).toBe("key-12345678");
+  });
+
+  it("reports UNPAID / PARTIAL / PAID from paid vs. total", async () => {
+    const unpaid = await purchaseInvoiceService.create(input, "user_1");
+    expect(unpaid.paymentStatus).toBe("UNPAID");
+    const partial = await purchaseInvoiceService.create({ ...input, idempotencyKey: null, paidAmount: 20 }, "user_1");
+    expect(partial.paymentStatus).toBe("PARTIAL");
+    const paid = await purchaseInvoiceService.create({ ...input, idempotencyKey: null, paidAmount: 50 }, "user_1");
+    expect(paid.paymentStatus).toBe("PAID");
   });
 });
 

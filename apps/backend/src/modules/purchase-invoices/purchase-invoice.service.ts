@@ -6,7 +6,13 @@ import { settingsService } from "../settings/settings.service";
 import { AppError } from "../../utils/AppError";
 import { auditService } from "../../services/audit.service";
 import type { CreatePurchaseInvoiceInput } from "@idm/shared-validation";
-import type { PurchaseInvoice, PurchaseInvoiceDetail } from "@idm/shared-types";
+import { getPurchasePaymentStatus } from "@idm/shared-utils";
+import type { PurchaseInvoice, PurchaseInvoiceDetail, SupplierPayment } from "@idm/shared-types";
+
+/** Prisma unique-constraint violation (e.g. the same idempotencyKey sent twice at once). */
+function isUniqueViolation(err: unknown): boolean {
+  return typeof err === "object" && err !== null && (err as { code?: string }).code === "P2002";
+}
 
 /** Fixed prefix for purchase invoice numbers ("PUR-000123") — unlike sales'
  * INVOICE_PREFIX, this is intentionally not a configurable Setting; the
@@ -28,13 +34,23 @@ function toDto(purchaseInvoice: {
   date: Date;
   totalAmount: number;
   paidAmount: number;
+  initialPaidAmount?: number;
   remainingAmount: number;
   paymentMethod: string;
   status: string;
-  paymentStatus: string;
   notes: string | null;
   createdAt: Date;
   updatedAt: Date;
+  payments?: Array<{
+    id: string;
+    supplierId: string;
+    amount: number;
+    date: Date;
+    method: string;
+    notes: string | null;
+    purchaseInvoiceId: string | null;
+    createdAt: Date;
+  }>;
   items: Array<{
     id: string;
     purchaseInvoiceId: string;
@@ -53,10 +69,21 @@ function toDto(purchaseInvoice: {
     date: purchaseInvoice.date.toISOString(),
     totalAmount: purchaseInvoice.totalAmount,
     paidAmount: purchaseInvoice.paidAmount,
+    initialPaidAmount: purchaseInvoice.initialPaidAmount ?? purchaseInvoice.paidAmount,
     remainingAmount: purchaseInvoice.remainingAmount,
     paymentMethod: purchaseInvoice.paymentMethod as PurchaseInvoice["paymentMethod"],
     status: purchaseInvoice.status as PurchaseInvoice["status"],
-    paymentStatus: purchaseInvoice.paymentStatus as PurchaseInvoice["paymentStatus"],
+    paymentStatus: getPurchasePaymentStatus(purchaseInvoice.totalAmount, purchaseInvoice.paidAmount),
+    payments: (purchaseInvoice.payments ?? []).map((pay) => ({
+      id: pay.id,
+      supplierId: pay.supplierId,
+      amount: pay.amount,
+      date: pay.date.toISOString(),
+      method: pay.method as SupplierPayment["method"],
+      notes: pay.notes,
+      purchaseInvoiceId: pay.purchaseInvoiceId,
+      createdAt: pay.createdAt.toISOString(),
+    })),
     notes: purchaseInvoice.notes,
     createdAt: purchaseInvoice.createdAt.toISOString(),
     updatedAt: purchaseInvoice.updatedAt.toISOString(),
@@ -102,6 +129,14 @@ export const purchaseInvoiceService = {
   },
 
   async create(input: CreatePurchaseInvoiceInput, actorUserId: string): Promise<PurchaseInvoice> {
+    // Idempotency: a re-sent request (double click, retry after a timeout)
+    // returns the invoice that was already created — no second invoice, no
+    // second stock increase, no second debt.
+    if (input.idempotencyKey) {
+      const existing = await purchaseInvoiceRepository.findByIdempotencyKey(input.idempotencyKey);
+      if (existing) return toDto(existing);
+    }
+
     // Confirms the supplier exists — throws SUPPLIER_NOT_FOUND otherwise.
     await supplierService.getByIdOrThrow(input.supplierId);
 
@@ -129,23 +164,33 @@ export const purchaseInvoiceService = {
       throw new AppError("المبلغ المدفوع أكبر من إجمالي فاتورة الشراء", 422, "OVERPAYMENT");
     }
 
-    const paymentStatus = paidAmount === 0 ? "UNPAID" : paidAmount === totalAmount ? "PAID" : "PARTIALLY_PAID";
-
-    const created = await purchaseInvoiceRepository.createWithMovements(
-      {
-        supplier: { connect: { id: input.supplierId } },
-        date: input.date,
-        totalAmount,
-        paidAmount,
-        remainingAmount: round2(totalAmount - paidAmount),
-        paymentStatus,
-        paymentMethod: input.paymentMethod,
-        notes: input.notes ?? null,
-      },
-      itemsData,
-      input.date,
-      PURCHASE_NUMBER_PREFIX,
-    );
+    let created;
+    try {
+      created = await purchaseInvoiceRepository.createWithMovements(
+        {
+          supplier: { connect: { id: input.supplierId } },
+          date: input.date,
+          totalAmount,
+          paidAmount,
+          initialPaidAmount: paidAmount,
+          remainingAmount: round2(totalAmount - paidAmount),
+          paymentMethod: input.paymentMethod,
+          notes: input.notes ?? null,
+          idempotencyKey: input.idempotencyKey ?? null,
+        },
+        itemsData,
+        input.date,
+        PURCHASE_NUMBER_PREFIX,
+      );
+    } catch (err) {
+      // Two identical requests raced: the unique key let exactly one win and
+      // rolled the other back (including its stock movements). Return the winner.
+      if (input.idempotencyKey && isUniqueViolation(err)) {
+        const winner = await purchaseInvoiceRepository.findByIdempotencyKey(input.idempotencyKey);
+        if (winner) return toDto(winner);
+      }
+      throw err;
+    }
 
     await auditService.log({
       userId: actorUserId,

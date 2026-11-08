@@ -3,6 +3,8 @@ import { createMainWindow } from "./window";
 import { registerIpcHandlers } from "./ipc";
 import { startBackend, stopBackend } from "./backend-process";
 
+let mainWindow: BrowserWindow | null = null;
+
 app.whenReady().then(async () => {
   try {
     await startBackend();
@@ -15,11 +17,11 @@ app.whenReady().then(async () => {
   }
 
   registerIpcHandlers();
-  createMainWindow();
+  mainWindow = createMainWindow();
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) {
-      createMainWindow();
+      mainWindow = createMainWindow();
     }
   });
 });

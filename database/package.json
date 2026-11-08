@@ -5,6 +5,7 @@
   "scripts": {
     "generate": "prisma generate --schema=prisma/schema.prisma",
     "migrate": "prisma migrate dev --schema=prisma/schema.prisma",
+    "migrate:deploy": "prisma migrate deploy --schema=prisma/schema.prisma",
     "studio": "prisma studio --schema=prisma/schema.prisma",
     "seed": "tsx prisma/seed.ts",
     "build:template": "tsx prisma/build-template-db.ts"

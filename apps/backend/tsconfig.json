@@ -5,14 +5,7 @@
     "moduleResolution": "Node",
     "outDir": "dist",
     "rootDir": "src",
-    "types": ["node"],
-    "noUncheckedIndexedAccess": false,
-    "paths": {
-      "@idm/shared-types": ["../../packages/shared-types/dist"],
-      "@idm/shared-validation": ["../../packages/shared-validation/dist"],
-      "@idm/shared-utils": ["../../packages/shared-utils/dist"]
-    }
+    "types": ["node"]
   },
-  "include": ["src"],
-  "exclude": ["src/**/*.test.ts"]
+  "include": ["src"]
 }

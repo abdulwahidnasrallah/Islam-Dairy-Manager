@@ -23,6 +23,16 @@ const CONFIRMED_INVOICE = { status: "CONFIRMED" as const };
  */
 const CONFIRMED_PURCHASE_INVOICE = { status: "CONFIRMED" as const };
 
+/**
+ * Which SupplierPayment rows are real cash-out: general payments (no invoice)
+ * and payments on a CONFIRMED purchase invoice. A payment on a cancelled
+ * invoice is treated as returned by the supplier along with the cancellation,
+ * so it no longer counts — consistent with the supplier balance.
+ */
+const COUNTED_SUPPLIER_PAYMENT = {
+  OR: [{ purchaseInvoiceId: null }, { purchaseInvoice: { status: "CONFIRMED" as const } }],
+};
+
 export const cashRegisterRepository = {
   async getTotals(from?: Date, to?: Date) {
     const dateFilter = from || to ? { date: { gte: from, lte: to } } : undefined;
@@ -38,11 +48,16 @@ export const cashRegisterRepository = {
       adjOutAgg,
     ] =
       await Promise.all([
-        prisma.supplierPayment.aggregate({ where: dateFilter, _sum: { amount: true } }),
+        prisma.supplierPayment.aggregate({
+          where: { ...dateFilter, ...COUNTED_SUPPLIER_PAYMENT },
+          _sum: { amount: true },
+        }),
         prisma.milkPurchase.aggregate({ where: dateFilter, _sum: { paidAmount: true } }),
         prisma.purchaseInvoice.aggregate({
           where: { ...dateFilter, ...CONFIRMED_PURCHASE_INVOICE },
-          _sum: { paidAmount: true },
+          // Only the up-front payment: later payments are SupplierPayment rows
+          // (counted above) — using paidAmount here would count them twice.
+          _sum: { initialPaidAmount: true },
         }),
         prisma.customerPayment.aggregate({ where: dateFilter, _sum: { amount: true } }),
         prisma.invoice.aggregate({
@@ -63,7 +78,7 @@ export const cashRegisterRepository = {
     return {
       supplierPayments: supplierPaymentsAgg._sum.amount ?? 0,
       milkPurchasePaid: milkPurchaseAgg._sum.paidAmount ?? 0,
-      purchaseInvoicePaid: purchaseInvoiceAgg._sum.paidAmount ?? 0,
+      purchaseInvoicePaid: purchaseInvoiceAgg._sum.initialPaidAmount ?? 0,
       customerPayments: customerPaymentsAgg._sum.amount ?? 0,
       invoicePaid: invoiceAgg._sum.paidAmount ?? 0,
       invoiceTotal: invoiceAgg._sum.totalAmount ?? 0,
@@ -78,10 +93,10 @@ export const cashRegisterRepository = {
     const [supplierPayments, milkPurchases, purchaseInvoices, customerPayments, invoices, expenses, adjustments] =
       await Promise.all([
         prisma.supplierPayment.findMany({
+          where: COUNTED_SUPPLIER_PAYMENT,
           orderBy: { date: "desc" },
           take: limit,
           include: { supplier: { select: { name: true } } },
-          where: { purchaseInvoiceId: null },
         }),
         prisma.milkPurchase.findMany({
           orderBy: { date: "desc" },
@@ -93,7 +108,7 @@ export const cashRegisterRepository = {
           orderBy: { date: "desc" },
           take: limit,
           include: { supplier: { select: { name: true } } },
-          where: { paidAmount: { gt: 0 }, ...CONFIRMED_PURCHASE_INVOICE },
+          where: { initialPaidAmount: { gt: 0 }, ...CONFIRMED_PURCHASE_INVOICE },
         }),
         prisma.customerPayment.findMany({
           orderBy: { date: "desc" },
@@ -139,7 +154,7 @@ export const cashRegisterRepository = {
         type: "OUT" as const,
         source: "فاتورة شراء",
         description: `${p.supplier.name} — ${p.purchaseNumber}`,
-        amount: p.paidAmount,
+        amount: p.initialPaidAmount,
       })),
       ...customerPayments.map((p) => ({
         date: p.date,

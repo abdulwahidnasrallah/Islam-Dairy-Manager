@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useSearchParams } from "react-router-dom";
 import { Plus, Trash2 } from "lucide-react";
@@ -54,12 +54,12 @@ const purchaseInvoiceColumns: TableColumn<PurchaseInvoice>[] = [
   },
   {
     header: "الحالة",
-    render: (i) =>
-      i.status === "CANCELLED" ? (
-        <span className="text-danger">ملغاة</span>
-      ) : (
-        <span className="text-success">سارية</span>
-      ),
+    render: (i) => {
+      if (i.status === "CANCELLED") return <span className="text-danger">ملغاة</span>;
+      if (i.paymentStatus === "PAID") return <span className="text-success">مدفوعة</span>;
+      if (i.paymentStatus === "PARTIAL") return <span className="text-warning">مدفوعة جزئياً</span>;
+      return <span className="text-danger">غير مدفوعة</span>;
+    },
   },
 ];
 
@@ -98,6 +98,9 @@ export default function PurchaseInvoicesPage() {
   const [paymentMethod, setPaymentMethod] = useState<"CASH" | "BANK" | "OTHER">("CASH");
   const [notes, setNotes] = useState("");
   const [error, setError] = useState<string | null>(null);
+  // One key per invoice attempt: a double click or a retry after a network error
+  // re-sends the SAME key, so the server creates (and stocks) the invoice once.
+  const submitKeyRef = useRef<string>(crypto.randomUUID());
 
   const total = items.reduce((sum, item) => {
     const qty = Number(item.quantity) || 0;
@@ -122,8 +125,10 @@ export default function PurchaseInvoicesPage() {
         paidAmount: Number(paidAmount || 0),
         paymentMethod,
         notes: notes || null,
+        idempotencyKey: submitKeyRef.current,
       }),
     onSuccess: () => {
+      submitKeyRef.current = crypto.randomUUID();
       setSupplierId("");
       setItems([emptyItem()]);
       setPaidAmount("");
@@ -169,6 +174,11 @@ export default function PurchaseInvoicesPage() {
               setError("الرجاء إكمال جميع حقول الأصناف");
               return;
             }
+            if (Number(paidAmount || 0) > total) {
+              setError("المبلغ المدفوع أكبر من إجمالي الفاتورة");
+              return;
+            }
+            if (mutation.isPending) return;
             mutation.mutate();
           }}
         >

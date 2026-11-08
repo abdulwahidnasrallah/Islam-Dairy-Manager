@@ -8,17 +8,16 @@ function sentinel(tableName: string, count: number) {
   return { __table: tableName, count };
 }
 
-const { deleteManyMocks, transactionMock } = vi.hoisted(() => {
-  const mocks = {
+const deleteManyMocks = {
   invoiceItem: vi.fn(() => sentinel("InvoiceItem", 1)),
   purchaseInvoiceItem: vi.fn(() => sentinel("PurchaseInvoiceItem", 2)),
   assistantMessage: vi.fn(() => sentinel("AssistantMessage", 3)),
   invoice: vi.fn(() => sentinel("Invoice", 4)),
-  purchaseInvoice: vi.fn(() => sentinel("PurchaseInvoice", 5)),
-  inventoryMovement: vi.fn(() => sentinel("InventoryMovement", 6)),
-  productionBatch: vi.fn(() => sentinel("ProductionBatch", 7)),
-  milkPurchase: vi.fn(() => sentinel("MilkPurchase", 8)),
-  supplierPayment: vi.fn(() => sentinel("SupplierPayment", 9)),
+  supplierPayment: vi.fn(() => sentinel("SupplierPayment", 5)),
+  purchaseInvoice: vi.fn(() => sentinel("PurchaseInvoice", 6)),
+  inventoryMovement: vi.fn(() => sentinel("InventoryMovement", 7)),
+  productionBatch: vi.fn(() => sentinel("ProductionBatch", 8)),
+  milkPurchase: vi.fn(() => sentinel("MilkPurchase", 9)),
   customerPayment: vi.fn(() => sentinel("CustomerPayment", 10)),
   assistantConversation: vi.fn(() => sentinel("AssistantConversation", 11)),
   dailyClosing: vi.fn(() => sentinel("DailyClosing", 12)),
@@ -28,9 +27,9 @@ const { deleteManyMocks, transactionMock } = vi.hoisted(() => {
   customer: vi.fn(() => sentinel("Customer", 16)),
   supplier: vi.fn(() => sentinel("Supplier", 17)),
   product: vi.fn(() => sentinel("Product", 18)),
-  };
-  return { deleteManyMocks: mocks, transactionMock: vi.fn(async (ops: unknown[]) => ops) };
-});
+};
+
+const transactionMock = vi.fn(async (ops: unknown[]) => ops);
 
 vi.mock("../../config/prisma", () => ({
   prisma: {
@@ -87,6 +86,9 @@ describe("dataCleanupRepository.deleteAllOperationalData", () => {
     mustComeBefore("SupplierPayment", "Supplier");
     mustComeBefore("PurchaseInvoice", "Supplier");
 
+    // SupplierPayment.purchaseInvoiceId references PurchaseInvoice, so payments must go first.
+    mustComeBefore("SupplierPayment", "PurchaseInvoice");
+
     // InvoiceItem references Invoice, so it must go first.
     mustComeBefore("InvoiceItem", "Invoice");
 
@@ -105,7 +107,8 @@ describe("dataCleanupRepository.deleteAllOperationalData", () => {
 
     expect(counts.InvoiceItem).toBe(1);
     expect(counts.PurchaseInvoiceItem).toBe(2);
-    expect(counts.PurchaseInvoice).toBe(5);
+    expect(counts.SupplierPayment).toBe(5);
+    expect(counts.PurchaseInvoice).toBe(6);
     expect(counts.Product).toBe(18);
     expect(counts.Customer).toBe(16);
     expect(counts.Supplier).toBe(17);

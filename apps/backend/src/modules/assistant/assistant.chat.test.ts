@@ -4,21 +4,19 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 // enough to exercise mapAnthropicError()'s instanceof checks: APIError
 // is the base class, the rest extend it, and APIConnectionError has no
 // `status` (a network-level failure never reached the API at all).
-const { FakeAPIError, FakeAPIConnectionError, FakeAuthenticationError, FakeRateLimitError, FakeNotFoundError, createMock } = vi.hoisted(() => {
-  class HoistedAPIError extends Error {}
-  class HoistedAPIConnectionError extends HoistedAPIError {}
-  class HoistedAuthenticationError extends HoistedAPIError { status = 401; }
-  class HoistedRateLimitError extends HoistedAPIError { status = 429; }
-  class HoistedNotFoundError extends HoistedAPIError { status = 404; }
-  return {
-    FakeAPIError: HoistedAPIError,
-    FakeAPIConnectionError: HoistedAPIConnectionError,
-    FakeAuthenticationError: HoistedAuthenticationError,
-    FakeRateLimitError: HoistedRateLimitError,
-    FakeNotFoundError: HoistedNotFoundError,
-    createMock: vi.fn(),
-  };
-});
+class FakeAPIError extends Error {}
+class FakeAPIConnectionError extends FakeAPIError {}
+class FakeAuthenticationError extends FakeAPIError {
+  status = 401;
+}
+class FakeRateLimitError extends FakeAPIError {
+  status = 429;
+}
+class FakeNotFoundError extends FakeAPIError {
+  status = 404;
+}
+
+const createMock = vi.fn();
 
 vi.mock("@anthropic-ai/sdk", () => {
   class MockAnthropic {
@@ -32,9 +30,7 @@ vi.mock("@anthropic-ai/sdk", () => {
   return { default: MockAnthropic };
 });
 
-const { mockEnv } = vi.hoisted(() => ({
-  mockEnv: { ANTHROPIC_API_KEY: undefined as string | undefined, ASSISTANT_MODEL: "claude-sonnet-5" },
-}));
+let mockEnv: { ANTHROPIC_API_KEY?: string; ASSISTANT_MODEL: string };
 vi.mock("../../config/env", () => ({
   get env() {
     return mockEnv;
@@ -78,8 +74,7 @@ import { assistantService } from "./assistant.service";
 describe("assistantService.chat — missing API key", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockEnv.ANTHROPIC_API_KEY = undefined;
-    mockEnv.ASSISTANT_MODEL = "claude-sonnet-5";
+    mockEnv = { ANTHROPIC_API_KEY: undefined, ASSISTANT_MODEL: "claude-sonnet-5" };
   });
 
   it("throws ASSISTANT_NOT_CONFIGURED and never calls the Anthropic API when the key is missing", async () => {
@@ -102,8 +97,7 @@ describe("assistantService.chat — missing API key", () => {
 describe("assistantService.chat — Anthropic API failures are mapped to clear errors", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockEnv.ANTHROPIC_API_KEY = "sk-ant-real-key";
-    mockEnv.ASSISTANT_MODEL = "claude-sonnet-5";
+    mockEnv = { ANTHROPIC_API_KEY: "sk-ant-real-key", ASSISTANT_MODEL: "claude-sonnet-5" };
   });
 
   it("maps AuthenticationError (bad/expired key) to ASSISTANT_INVALID_API_KEY, not a generic error", async () => {

@@ -55,11 +55,14 @@ export type CreateMilkPurchaseInput = z.infer<typeof createMilkPurchaseSchema>;
 
 export const createSupplierPaymentSchema = z.object({
   supplierId: z.string().min(1, "المورد مطلوب"),
-  purchaseInvoiceId: z.string().min(1).optional().nullable(),
   amount: z.coerce.number().positive("المبلغ يجب أن يكون أكبر من صفر"),
   date: z.coerce.date(),
   method: z.enum(["CASH", "BANK", "OTHER"]).default("CASH"),
   notes: z.string().trim().optional().nullable(),
+  /** Optional: settle this specific purchase invoice (it must belong to the supplier). */
+  purchaseInvoiceId: z.string().min(1).optional().nullable(),
+  /** Optional client key so re-sending the same request never records the payment twice. */
+  idempotencyKey: z.string().trim().min(8).max(100).optional().nullable(),
 });
 export type CreateSupplierPaymentInput = z.infer<typeof createSupplierPaymentSchema>;
 
@@ -224,5 +227,7 @@ export const createPurchaseInvoiceSchema = z.object({
   paidAmount: z.coerce.number().min(0, "المبلغ المدفوع لا يمكن أن يكون سالباً").default(0),
   paymentMethod: z.enum(["CASH", "BANK", "OTHER"]).default("CASH"),
   notes: z.string().trim().optional().nullable(),
+  /** Optional client key so re-sending the same request never creates (or re-stocks) a second invoice. */
+  idempotencyKey: z.string().trim().min(8).max(100).optional().nullable(),
 });
 export type CreatePurchaseInvoiceInput = z.infer<typeof createPurchaseInvoiceSchema>;

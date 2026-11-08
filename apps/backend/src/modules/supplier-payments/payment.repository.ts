@@ -9,42 +9,40 @@ export const supplierPaymentRepository = {
     });
   },
 
+  findByIdempotencyKey(idempotencyKey: string) {
+    return prisma.supplierPayment.findUnique({ where: { idempotencyKey } });
+  },
+
+  /** General payment (not tied to an invoice) — only the payment row is written. */
   create(data: Prisma.SupplierPaymentCreateInput) {
     return prisma.supplierPayment.create({ data });
   },
 
-  createGeneral(data: Prisma.SupplierPaymentCreateInput, supplierId: string) {
+  /**
+   * Records a payment against ONE purchase invoice: the payment row AND the
+   * invoice's new paidAmount / remainingAmount are written in a single
+   * transaction, so they can never disagree.
+   *
+   * The invoice update is conditional on the paidAmount the caller read
+   * (optimistic concurrency) and on status CONFIRMED: if a second payment or
+   * a cancellation slipped in between the read and this write, nothing is
+   * written and `null` is returned — the money can never be applied on top of
+   * stale numbers (no double-counted or over-applied payment).
+   */
+  createLinked(
+    data: Prisma.SupplierPaymentCreateInput,
+    invoiceId: string,
+    expectedPaidAmount: number,
+    newPaidAmount: number,
+    newRemainingAmount: number,
+  ) {
     return prisma.$transaction(async (tx) => {
-      const [milk, invoices, payments] = await Promise.all([
-        tx.milkPurchase.aggregate({ where: { supplierId }, _sum: { totalAmount: true, paidAmount: true } }),
-        tx.purchaseInvoice.aggregate({ where: { supplierId, status: "CONFIRMED" }, _sum: { totalAmount: true, paidAmount: true } }),
-        tx.supplierPayment.aggregate({ where: { supplierId, purchaseInvoiceId: null }, _sum: { amount: true } }),
-      ]);
-      const balance =
-        (milk._sum.totalAmount ?? 0) + (invoices._sum.totalAmount ?? 0) -
-        (milk._sum.paidAmount ?? 0) - (invoices._sum.paidAmount ?? 0) - (payments._sum.amount ?? 0);
-      if (data.amount > balance) return { kind: "overpayment" as const, balance };
-      return { kind: "created" as const, payment: await tx.supplierPayment.create({ data }) };
-    });
-  },
-
-  createForInvoice(data: Prisma.SupplierPaymentCreateInput, invoiceId: string) {
-    return prisma.$transaction(async (tx) => {
-      const invoice = await tx.purchaseInvoice.findUnique({ where: { id: invoiceId } });
-      if (!invoice || invoice.supplierId !== data.supplier?.connect?.id) return { kind: "missing" as const };
-      if (invoice.status !== "CONFIRMED") return { kind: "cancelled" as const };
-
-      const remaining = invoice.totalAmount - invoice.paidAmount;
-      if (data.amount > remaining) return { kind: "overpayment" as const };
-
-      const payment = await tx.supplierPayment.create({ data });
-      const paidAmount = invoice.paidAmount + data.amount;
-      const paymentStatus = paidAmount === 0 ? "UNPAID" : paidAmount === invoice.totalAmount ? "PAID" : "PARTIALLY_PAID";
-      await tx.purchaseInvoice.update({
-        where: { id: invoice.id },
-        data: { paidAmount, remainingAmount: invoice.totalAmount - paidAmount, paymentStatus },
+      const updated = await tx.purchaseInvoice.updateMany({
+        where: { id: invoiceId, status: "CONFIRMED", paidAmount: expectedPaidAmount },
+        data: { paidAmount: newPaidAmount, remainingAmount: newRemainingAmount },
       });
-      return { kind: "created" as const, payment };
+      if (updated.count === 0) return null;
+      return tx.supplierPayment.create({ data });
     });
   },
 };
