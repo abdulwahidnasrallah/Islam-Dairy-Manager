@@ -1,4 +1,3 @@
-ALTER TABLE "SupplierPayment" ADD COLUMN "purchaseInvoiceId" TEXT;
 ALTER TABLE "PurchaseInvoice" ADD COLUMN "paymentStatus" TEXT NOT NULL DEFAULT 'UNPAID';
 
 UPDATE "PurchaseInvoice"
