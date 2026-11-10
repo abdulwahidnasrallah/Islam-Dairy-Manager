@@ -203,7 +203,7 @@ model SupplierPayment {
   idempotencyKey    String? @unique
 
   supplier        Supplier          @relation(fields: [supplierId], references: [id], onDelete: Restrict)
-  purchaseInvoice PurchaseInvoice?  @relation(fields: [purchaseInvoiceId], references: [id], onDelete: Restrict)
+  purchaseInvoice PurchaseInvoice?  @relation(fields: [purchaseInvoiceId], references: [id], onDelete: SetNull)
 
   @@index([supplierId])
   @@index([date])
@@ -536,6 +536,7 @@ model PurchaseInvoice {
   remainingAmount Float
   paymentMethod   String   @default("CASH")
   status          String   @default("CONFIRMED")
+  paymentStatus   String   @default("UNPAID")
   notes           String?
   /// Client-generated key: re-sending the same create request can never
   /// create (or re-stock) a second invoice.

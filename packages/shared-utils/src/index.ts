@@ -5,11 +5,20 @@
 
 /** Formats a number as currency for display in the Arabic UI. */
 export function formatCurrency(amount: number, currency = "USD"): string {
-  return new Intl.NumberFormat("ar-EG", {
-    style: "currency",
-    currency,
+  if (/^[A-Z]{3}$/.test(currency)) {
+    return new Intl.NumberFormat("ar-EG", {
+      style: "currency",
+      currency,
+      minimumFractionDigits: 2,
+    }).format(amount);
+  }
+
+  // Settings may contain a custom display label (for example "ل .س"),
+  // which is not valid as an Intl currency code.
+  return `${new Intl.NumberFormat("ar-EG", {
     minimumFractionDigits: 2,
-  }).format(amount);
+    maximumFractionDigits: 2,
+  }).format(amount)} ${currency}`;
 }
 
 /** Formats a date using the Gregorian calendar with Arabic month/day names. */
